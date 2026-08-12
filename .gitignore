@@ -1,0 +1,42 @@
+# Python environments
+.venv/
+tf210_env/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Node
+node_modules/
+
+# Large ML/model files
+*.h5
+*.keras
+*.pth
+*.pt
+*.ckpt
+
+# Logs
+*.log
+
+# DeepGuard datasets
+data/
+dataset/
+dataset_crops/
+
+# Downloaded/trained ML models
+backend/saved_models/
+
+# Large sample media
+samples/

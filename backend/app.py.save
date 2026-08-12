@@ -1,0 +1,110 @@
+import os
+import time
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from werkzeug.utils import secure_filename
+import tensorflow as tf
+import numpy as np
+import cv2
+from mtcnn import MTCNN
+from huggingface_hub import hf_hub_download
+
+source /Users/khushisingh/deepguard-2.0/.venv/bin/activate
+source /Users/khushisingh/deepguard-2.0/.venv/bin/activate
+source /Users/khushisingh/deepguard-2.0/.venv/bin/activate
+# --- Configuration ---
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "frontend_uploads")
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "saved_models")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+ALLOWED_EXT = {"mp4", "mov", "avi", "mkv", "webm"}
+
+# --- Flask app setup ---
+app = Flask(__name__, static_folder="../frontend", template_folder="../frontend")
+CORS(app)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024 * 1024  # 1 GB
+
+# --- Load pretrained model ---
+MODEL_PATH = os.path.join(MODEL_DIR, "deepfake_detection_model.h5")
+
+if not os.path.exists(MODEL_PATH):
+    print("⬇️ Downloading pretrained model from Hugging Face...")
+    MODEL_PATH = hf_hub_download(
+        repo_id="brmk/deepfake-detection-model",
+        filename="deepfake_detection_model.h5",
+        cache_dir=MODEL_DIR
+    )
+    print("✅ Model downloaded successfully!")
+
+print("🧠 Loading model into memory...")
+model = tf.keras.models.load_model(MODEL_PATH)
+detector = MTCNN()
+print("✅ Model and MTCNN face detector loaded.")
+
+# --- Helper functions ---
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
+
+def preprocess_frame(frame):
+    face = detector.detect_faces(frame)
+    if len(face) == 0:
+        return None
+    x, y, w, h = face[0]["box"]
+    face_img = frame[y:y+h, x:x+w]
+    face_img = cv2.resize(face_img, (224, 224))
+    face_img = face_img / 255.0
+    return np.expand_dims(face_img, axis=0)
+
+def analyze_video(video_path):
+    cap = cv2.VideoCapture(video_path)
+    frame_count, fake_probs = 0, []
+
+    while True:
+        ret, frame = cap.read()
+        if not ret or frame_count > 10:  # Limit for speed
+            break
+        frame_count += 1
+        pre = preprocess_frame(frame)
+        if pre is not None:
+            pred = model.predict(pre, verbose=0)[0][0]
+            fake_probs.append(float(pred))
+
+    cap.release()
+    if not fake_probs:
+        return {"verdict": "no face detected"}
+    avg_prob = np.mean(fake_probs)
+    return {
+        "verdict": "fake" if avg_prob > 0.5 else "real",
+        "confidence": round(avg_prob, 2),
+        "frames_analyzed": len(fake_probs)
+    }
+
+# --- Routes ---
+@app.route("/")
+def index():
+    return send_from_directory("../frontend", "deepguard.html")
+
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    if "file" not in request.files:
+        return jsonify({"error": "no file part"}), 400
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "no selected file"}), 400
+    if not allowed_file(file.filename):
+        return jsonify({"error": "file type not allowed"}), 400
+
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    file.save(filepath)
+
+    start = time.time()
+    result = analyze_video(filepath)
+    end = time.time()
+    result["processing_time"] = round(end - start, 2)
+    return jsonify(result)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
